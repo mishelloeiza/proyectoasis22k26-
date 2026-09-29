@@ -178,7 +178,7 @@ namespace CapaVista_Navegador
                     {
                         _Grid.NavegadorMetFiltrarPorLlave(
                             ColumnaPK.Nombre,
-                            FormularioConsultas.IdSeleccionado);
+                            FormularioConsultas.CampoSeleccionado);
                     }
                 }
             }

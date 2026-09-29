@@ -1,5 +1,5 @@
 :: ============================================================================
-:: BUILD NAVEGADOR - VISUAL STUDIO 2022
+:: BUILD NAVEGADOR - CUALQUIER VERSION DE VISUAL STUDIO / MSBUILD
 :: ============================================================================
 :: Compila, en una sola pasada y en el orden correcto de dependencias, todo lo
 :: que necesita el Navegador:
@@ -10,8 +10,8 @@
 ::   4. SEGURIDAD VISTA : CapaVista_Seguridad (depende de CapaVista_Navegador)
 ::   5. EJECUTABLES   : Ejecucion_Navegador, Ejecucion_Seguridad, Ejecucion_Consultas
 ::
-:: Ya no hacen falta varios ciclos: CapaVista_Navegador no referencia a
-:: CapaVista_Seguridad, asi que no hay dependencia circular.
+:: MSBuild se busca automaticamente (vswhere, VS 2022/2019/2017, MSBuild 14/12,
+:: .NET Framework, PATH). Si no se encuentra, el script pregunta la ruta.
 ::
 :: REPORTEADOR queda fuera a proposito (Navegador no lo usa).
 ::
@@ -25,11 +25,58 @@ setlocal enabledelayedexpansion
 color 0A
 
 :: ---------------------------------------------------------------------------
-:: RUTAS FIJAS (cambiar solo si tu Visual Studio o el repositorio cambian)
+:: RUTA FIJA DEL REPOSITORIO (cambiar solo si el repositorio cambia)
 :: ---------------------------------------------------------------------------
-:: Si tienes Professional o Enterprise, cambia "Community" por la edicion.
-set "MSBUILD_PATH=C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
 set "COMP=C:\proyectoasis22k26\codigo\componentes"
+
+:: ---------------------------------------------------------------------------
+:: BUSCAR MSBUILD AUTOMATICAMENTE (cualquier version instalada)
+:: ---------------------------------------------------------------------------
+set "MSBUILD_PATH="
+set "PF86=%ProgramFiles(x86)%"
+if not defined PF86 set "PF86=%ProgramFiles%"
+set "PF64=%ProgramFiles%"
+set "VSWHERE=%PF86%\Microsoft Visual Studio\Installer\vswhere.exe"
+
+:: 1) vswhere (detecta VS 2017/2019/2022 y Build Tools)
+if exist "%VSWHERE%" (
+    for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -prerelease -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe`) do set "MSBUILD_PATH=%%i"
+)
+
+:: 2) Rutas conocidas de Visual Studio 2022 / 2019 / 2017
+if not defined MSBUILD_PATH (
+    for %%V in (18 2022 2019 2017) do (
+        for %%E in (Enterprise Professional Community Insiders BuildTools Preview) do (
+            for %%B in (Current 15.0) do (
+                if not defined MSBUILD_PATH if exist "%PF64%\Microsoft Visual Studio\%%V\%%E\MSBuild\%%B\Bin\MSBuild.exe" set "MSBUILD_PATH=%PF64%\Microsoft Visual Studio\%%V\%%E\MSBuild\%%B\Bin\MSBuild.exe"
+                if not defined MSBUILD_PATH if exist "%PF86%\Microsoft Visual Studio\%%V\%%E\MSBuild\%%B\Bin\MSBuild.exe" set "MSBUILD_PATH=%PF86%\Microsoft Visual Studio\%%V\%%E\MSBuild\%%B\Bin\MSBuild.exe"
+            )
+        )
+    )
+)
+
+:: 3) MSBuild antiguo (VS 2015 / 2013) o el de .NET Framework
+if not defined MSBUILD_PATH if exist "%PF86%\MSBuild\14.0\Bin\MSBuild.exe" set "MSBUILD_PATH=%PF86%\MSBuild\14.0\Bin\MSBuild.exe"
+if not defined MSBUILD_PATH if exist "%PF86%\MSBuild\12.0\Bin\MSBuild.exe" set "MSBUILD_PATH=%PF86%\MSBuild\12.0\Bin\MSBuild.exe"
+if not defined MSBUILD_PATH if exist "%windir%\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe" set "MSBUILD_PATH=%windir%\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe"
+if not defined MSBUILD_PATH if exist "%windir%\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe" set "MSBUILD_PATH=%windir%\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe"
+
+:: 4) Lo que haya en el PATH
+if not defined MSBUILD_PATH (
+    for /f "delims=" %%i in ('where msbuild 2^>nul') do if not defined MSBUILD_PATH set "MSBUILD_PATH=%%i"
+)
+
+:: 5) Ultimo recurso: preguntar
+if not defined MSBUILD_PATH (
+    echo No se encontro MSBuild automaticamente.
+    set /p "MSBUILD_PATH=Escribe la ruta completa de MSBuild.exe: "
+)
+:: Quitar comillas si el usuario las escribio
+if defined MSBUILD_PATH set "MSBUILD_PATH=!MSBUILD_PATH:"=!"
+
+:: MSBuild viejo (14.0, 12.0, .NET Framework) no soporta /restore
+set "RESTORE_ARG=/restore"
+echo "%MSBUILD_PATH%" | findstr /i /l /c:"v4.0.30319" /c:"14.0\Bin" /c:"12.0\Bin" >nul && set "RESTORE_ARG="
 
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
@@ -41,18 +88,18 @@ echo ============================================
 echo COMPILACION NAVEGADOR (CONSULTAS + SEGURIDAD)
 echo ============================================
 
-if not exist "%MSBUILD_PATH%" (
-    echo [ERROR] No se encontro MSBuild en:
-    echo         %MSBUILD_PATH%
-    echo         Ajusta MSBUILD_PATH al inicio de este archivo.
-    goto FIN_ERROR
-)
+if not defined MSBUILD_PATH goto ERR_MSBUILD
+if not exist "%MSBUILD_PATH%" goto ERR_MSBUILD
 if not exist "%COMP%" (
     echo [ERROR] No existe la carpeta de componentes:
     echo         %COMP%
     echo         Ajusta COMP al inicio de este archivo.
     goto FIN_ERROR
 )
+
+echo MSBuild: %MSBUILD_PATH%
+echo MSBuild: %MSBUILD_PATH% >> "%LOG%"
+if not defined RESTORE_ARG echo [AVISO] Este MSBuild no soporta /restore: los paquetes NuGet no se restauran.
 
 set /a total=0
 set /a ok=0
@@ -151,6 +198,12 @@ choice /c RS /n /m "Seleccion: "
 if errorlevel 2 goto FIN
 if errorlevel 1 goto INICIO
 
+:ERR_MSBUILD
+echo [ERROR] No se encontro MSBuild.
+echo         Instala "Build Tools for Visual Studio" (gratis, sin IDE)
+echo         o escribe la ruta correcta cuando el script la pida.
+goto FIN_ERROR
+
 :FIN_ERROR
 echo.
 pause
@@ -162,7 +215,8 @@ exit /b 0
 
 :: ==========================================================
 :: FUNCION :Build  -> %1 = ruta del .csproj o .sln
-:: Restaura paquetes NuGet, recompila en Debug y registra el resultado.
+:: Restaura paquetes NuGet (si el MSBuild lo soporta), recompila en Debug
+:: y registra el resultado.
 :: Devuelve errorlevel 0 si compilo, 1 si fallo.
 :: ==========================================================
 :Build
@@ -170,15 +224,19 @@ set /a total+=1
 echo ------------------------------------------------
 echo Compilando: %~nx1
 echo ------------------------------------------------
+set "TMPLOG=%ROOT_DIR%logs\_ultimo.txt"
+if /i "%~x1"==".csproj" (
+    "%MSBUILD_PATH%" "%~1" %RESTORE_ARG% /p:RestorePackagesConfig=true /p:SolutionDir="%~dp1..\\" /t:Rebuild /p:Configuration=Debug /v:minimal > "%TMPLOG%" 2>&1
+) else (
+    "%MSBUILD_PATH%" "%~1" %RESTORE_ARG% /t:Rebuild /p:Configuration=Debug /v:minimal > "%TMPLOG%" 2>&1
+)
+set "BUILD_RC=%errorlevel%"
 echo. >> "%LOG%"
 echo ##### %~1 >> "%LOG%"
-if /i "%~x1"==".csproj" (
-    "%MSBUILD_PATH%" "%~1" /restore /p:RestorePackagesConfig=true /p:SolutionDir="%~dp1..\\" /t:Rebuild /p:Configuration=Debug /v:minimal >> "%LOG%" 2>&1
-) else (
-    "%MSBUILD_PATH%" "%~1" /restore /t:Rebuild /p:Configuration=Debug /v:minimal >> "%LOG%" 2>&1
-)
-if errorlevel 1 (
+type "%TMPLOG%" >> "%LOG%"
+if not "%BUILD_RC%"=="0" (
     echo [ERROR] %~nx1  ^(ver log^)
+    findstr /i /c:": error " /c:"error MSB" "%TMPLOG%"
     echo [ERROR] %~1 >> "%LOG%"
     set /a fail+=1
     exit /b 1
